@@ -1,5 +1,0 @@
-NFILE=10
-DIM=50
-NT=4
-./logFile.log
-./mysock
