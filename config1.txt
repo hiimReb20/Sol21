@@ -1,5 +1,0 @@
-NFILE=10000
-DIM=128000000
-NT=1
-./logFile.log
-./mysock
