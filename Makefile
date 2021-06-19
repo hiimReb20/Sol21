@@ -6,7 +6,7 @@ CON2 = ./configurazioni/config2.txt
 NOMES = ./Server.c
 NOMEC = ./Client.c
 
-.PHONY: all server.o client.o ./lib/myAPI.o ./lib/mylib.o ./lib/icl_hash.o test1 test2 client test2val test3 clean
+.PHONY: all server.o client.o ./lib/myAPI.o ./lib/mylib.o ./lib/icl_hash.o ./lib/parser.o test1 test2 client test2val test3 clean
 
 all: server.o client.o
 	
@@ -14,8 +14,8 @@ all: server.o client.o
 server.o: ./lib/mylib.o ./lib/icl_hash.o
 	@$(CC) $(NOMES) $(CFLAGS) -o server.o -L. -lmyl -licl
 
-client.o: ./lib/myAPI.o
-	@$(CC) $(NOMEC) $(CFLAGS) -o client.o -L. -lmyA
+client.o: ./lib/myAPI.o ./lib/parser.o
+	@$(CC) $(NOMEC) $(CFLAGS) -o client.o -L. -lp -lmyA
 
 #compilazione e linking libreria	
 ./lib/mylib.o: ./lib/mylib.c 
@@ -29,6 +29,10 @@ client.o: ./lib/myAPI.o
 ./lib/icl_hash.o: ./lib/icl_hash.c
 	@$(CC) $(CFLAGS) $< -c -o ./lib/icl_hash.o
 	@ar rvs libicl.a ./lib/icl_hash.o
+
+./lib/parser.o: ./lib/parser.c
+	@$(CC) $(CFLAGS) $< -c -o ./lib/parser.o
+	@ar rvs libp.a ./lib/parser.o
 
 
 client:
@@ -60,4 +64,4 @@ test3:
 	kill -1 $$(cat t2.PID); \
 
 clean:
-	@rm -f *.o libmyl.a libmyA.a libicl.a ./lib/mylib.o ./lib/myAPI.o ./lib/icl_hash.o mysock* *.PID ./dir/*.txt output
+	@rm -f *.o libmyl.a libmyA.a libicl.a libp.a ./lib/mylib.o ./lib/myAPI.o ./lib/icl_hash.o ./lib/parser.o mysock* *.PID ./dir/*.txt output
