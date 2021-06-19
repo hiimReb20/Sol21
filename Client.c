@@ -1,8 +1,14 @@
-#include "./lib/myAPI.h"
-#define DELIM " -"
-#define BELLO "./bello"
+//#include "./lib/myAPI.h"
+#include "./lib/parser.h"
+
 
 int main(int argc, char* argv[]){
+
+    if(argc==1){
+        perror("Client: manca opzione");
+        exit(EXIT_FAILURE);
+    }
+
     char* sockname;
     char* pathname;
     char* dirname;
@@ -12,11 +18,8 @@ int main(int argc, char* argv[]){
     void* buf;
     char b[6];
     int l_com=0;
+    int opt;
     size_t siz;
-    struct timespec abstime;
-    struct timespec prevtime;
-    unsigned int seme=1;
-    int ran_sec, ran_nsec, msec, flags;
     
 
     ec_null(sockname=malloc(10*sizeof(char)), "Client: malloc: sockname\n");
@@ -29,106 +32,79 @@ int main(int argc, char* argv[]){
     sprintf(sockname, "./mysock");
     sprintf(pathname, "/path");
     sprintf(dirname, "/dir");
-    msec=1;
-    flags=1;
-    /*scanf("%s", comando);
-    while(strncmp(comando, "-C", strlen(comando))!=0){
+
+    while((opt=getopt(argc, argv, "hf:w:W:D:r:R:d:t:l:u:c:a:o:p"))!=-1){
         //printf("%s\n", comando);
-        fflush(stdout);
-        com_pointer=strtok(comando, DELIM);
-        while(com_pointer){
+        switch(opt){
             //fprintf(f, "%s\n\n", com_pointer);
-            switch(com_pointer[0]){
                 case 'h':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: h\n");
-                    fflush(stdout);
+                    option_h();
+                    free(sockname);
+                    free(pathname);
+                    free(dirname);
+                    free(comando);
+                    free(comando_tok);
+                    exit(EXIT_SUCCESS);
                 } break;
                 case 'f':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: f\n");
-                    fflush(stdout);
+                    option_f(optarg);
                 } break;
                 case 'w':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: w\n");
-                    fflush(stdout);
+                    option_w(optarg);
                 } break;
                 case 'W':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: W\n");
-                    fflush(stdout);
+                    option_W(optarg);
                 } break;
                 case 'D':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: D\n");
-                    fflush(stdout);
+                    option_D(optarg);
                 } break;
                 case 'r':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: r\n");
-                    fflush(stdout);
+                    option_r(optarg);
                 } break;
                 case 'R':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: R\n");
-                    fflush(stdout);
+                    option_R(optarg);
                 } break;
                 case 'd':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: d\n");
-                    fflush(stdout);
+                    option_d(optarg);
                 } break;
                 case 't':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: t\n");
-                    fflush(stdout);
+                    option_t(optarg);
                 } break;
                 case 'l':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: l\n");
-                    fflush(stdout);
+                    perror("-l: operazione non supportata");
                 } break;
                 case 'u':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: u\n");
-                    fflush(stdout);
+                    perror("-u: operazione non supportata");
                 } break;
                 case 'c':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: c\n");
-                    fflush(stdout);
+                    perror("-c: operazione non supportata");
                 } break;
+                case 'a':{
+                    option_a(optarg);
+                }break;
+                case 'o':{
+                    option_o(optarg);
+                }break;
                 case 'p':{
-                    //printf("%s\n", com_pointer[0]);
-                    printf("operazione: p\n");
-                    fflush(stdout);
+                    option_p();
                 } break;
+                case '?':{
+                    printf("%s: comando non riconosciuto\n", argv[optind-1]);
+                }
                 default:
                     printf("Operazione non valida\n");
                     fflush(stdout);
                 break;
-            }
-           com_pointer=strtok(NULL, DELIM); 
         }
-        scanf("%s", comando);
-    }*/
+    }
 
     
-    
-    ran_sec=rand_r(&seme);
-    ++seme;
-    ran_nsec=rand_r(&seme);
-    ran_sec=(ran_sec%60)+60;
-    ran_nsec=(ran_nsec%10000);
-    clock_gettime(CLOCK_REALTIME, &prevtime);
-    abstime.tv_sec=prevtime.tv_sec+ran_sec;
-    abstime.tv_nsec=prevtime.tv_nsec+ran_nsec;
+    run_client();
     //printf("ran_sec=%d, ran_nsec=%d\n", ran_sec, ran_nsec);
     //printf("ab-tvsec=%ld, prev-tvsec=%ld\n", abstime.tv_sec, prevtime.tv_sec);
     //printf("ab-tvnsec=%ld, prev-tvnsec=%ld\n", abstime.tv_nsec, prevtime.tv_nsec);
     
-    //for(int j=0; j<20; j++){
+    /*for(int j=0; j<20; j++){
     openConnection(sockname, msec, abstime);
     
     openFile("/prova1.txt", O_CREATE);
@@ -188,7 +164,7 @@ int main(int argc, char* argv[]){
 
 
 
-    writeFile(pathname, dirname);
+    /*writeFile(pathname, dirname);
     writeFile("/prova1.txt", "./dir");
     writeFile("/bellissimo.txt", "./dir");
     writeFile("/prova2.txt", "./dir");
@@ -233,7 +209,7 @@ int main(int argc, char* argv[]){
     removeFile(pathname);
     
     closeConnection(sockname);
-    //}
+    }*/
     free(sockname);
     free(pathname);
     free(dirname);
