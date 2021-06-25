@@ -3,9 +3,11 @@
 static int fd_sk=-1;
 static int empty=1;
 c_f *q;
+static char* sock;
 
 
 int openConnection(const char* sockname, int msec, const struct timespec abstime){
+    q=NULL;
     if(sockname==NULL || msec<0){
         perror("myAPI: openConnection: parametri non validi");
         errno=EINVAL;
@@ -40,10 +42,11 @@ int openConnection(const char* sockname, int msec, const struct timespec abstime
             return -1;
         }
     }
-    //attenddere richiesta
-    printf("Socket creata dopo %d prove con socket=%d\n", x, fd_sk);
+
+    ec_null(sock=malloc((strlen(sockname)+1)*sizeof(char)), "myAPI: openConnection: malloc: sock");
+    strncpy(sock, sockname, strlen(sockname)+1);
     return 0;
-}
+} 
 
 int closeConnection(const char* sockname){
     if(sockname==NULL ){
@@ -51,11 +54,11 @@ int closeConnection(const char* sockname){
         errno=EINVAL;
         return -1;
     }
-    /*if(strcmp(sockname, "./mysock1")!=0){
+    if(strcmp(sockname, sock)!=0){
         perror("myAPI: closeConnection: socket inesistente");
         errno=ENOENT;
         return -1;
-    }*/
+    }
     if(fd_sk==-1){
         perror("myAPI: closeConnection: fd_sk non inizializzato");
         errno=EINVAL;
@@ -82,13 +85,6 @@ int closeConnection(const char* sockname){
         free(write_buf);
         return -1;
     }
-
-    if(writen(fd_sk, (void*) write_buf, 7)==-1){
-        perror("myAPI: closeConnection: writen");
-        free(read_buf);
-        free(write_buf);
-        return -1;
-    }
     
     if(readn(fd_sk, (void*) read_buf, 3)==-1){
         perror("myAPI: closeConnection: readn");
@@ -97,7 +93,7 @@ int closeConnection(const char* sockname){
         return -1;
 
     }
-    //riferire al server e attebdere richiesta
+    //riferire al server e attendere richiesta
     if(close(fd_sk)==-1){
         perror("myAPI: closeConnection: errore close");
         free(read_buf);
@@ -111,7 +107,7 @@ int closeConnection(const char* sockname){
         errno=EINTR;
         return -1;
     }
-    printf("CloseC ok\n");
+    free(sock);
     return 0;
 }
 int openFile(const char* pathname, int flags){
@@ -126,7 +122,7 @@ int openFile(const char* pathname, int flags){
         return -1;
     }
 
-    /*struct stat info;
+    struct stat info;
     if(stat(pathname, &info)==-1){
         perror("openFile: pathname non esiste");
         errno=ENOENT;
@@ -136,7 +132,7 @@ int openFile(const char* pathname, int flags){
         perror("openFile: pathname non è un file");
         errno=ENOTDIR;
         return -1;
-    }*/
+    }
     
     if(check_o(&q, pathname)!=-1){
         perror("myAPI: openFile: File già aperto");
@@ -335,7 +331,6 @@ int openFile(const char* pathname, int flags){
     
     free(write_buf);
     free(read_buf);
-    printf("openfile ok\n");
     return 0;
 }
 int readFile(const char* pathname, void** buf, size_t* size){
@@ -407,21 +402,25 @@ int readFile(const char* pathname, void** buf, size_t* size){
         free(read_buf);
         return -1;
     }
-
-    if((b=malloc((lung+1)*sizeof(char)))==NULL){
-        perror("myAPI: readFile: malloc b");
-        free(read_buf);
-        errno=ENOMEM;
-        return -1;
+    *(size)=0;
+    b=NULL;
+    if(lung!=0){
+        if((b=malloc((lung+1)*sizeof(char)))==NULL){
+            perror("myAPI: readFile: malloc b");
+            free(read_buf);
+            errno=ENOMEM;
+            return -1;
+        }
+    
+        if(readn(fd_sk, b, lung+1)==-1){
+            perror("myAPI: readFile: readn");
+            free(read_buf);
+            return -1;
+        }
+        *(size)=lung+1;
+        *(buf)=b;
     }
     
-    if(readn(fd_sk, b, lung+1)==-1){
-        perror("myAPI: readFile: readn");
-        free(read_buf);
-        return -1;
-    }
-    *(size)=lung+1;
-    *buf=(void*)b;
     if(readn(fd_sk, (void*) read_buf, 3)==-1){
         perror("myAPI: readFile: readn");
         free(read_buf);
@@ -433,8 +432,6 @@ int readFile(const char* pathname, void** buf, size_t* size){
         errno=EBADMSG;
         return -1;
         }
-    //free(b);
-    //qui andrà scritto e poi cancellato il buffer
     free(read_buf);
     int r=reset_o(&q, pathname);
     if(r==1){
@@ -447,7 +444,6 @@ int readFile(const char* pathname, void** buf, size_t* size){
         errno=ESPIPE;
         return -1;
     }
-    printf("readfile ok\n");
     return 0;
 
 }
@@ -561,7 +557,6 @@ int readNFiles(int N, const char* dirname){
     }
     //free(write_buf);
     free(read_buf);
-    printf("readnfile ok\n");
     return 0;
 
 }
@@ -573,7 +568,6 @@ int writeFile(const char* pathname, const char* dirname){
         return -1;
     }
 
-    //poi dovrà essere eliminata perchè già in openFile
     struct stat info;
     if(stat(pathname, &info)==-1){
         perror("writeFile: pathname non esiste");
@@ -612,6 +606,7 @@ int writeFile(const char* pathname, const char* dirname){
     char* write_buf;
     char* read_buf;
     char* cont;
+    char* temp;
     int l;
     FILE *f;
     ec_null(write_buf=malloc(100*sizeof(char)), "myAPI: writeFile: malloc write_buf");
@@ -637,10 +632,15 @@ int writeFile(const char* pathname, const char* dirname){
     ec_meno1_err(writen(fd_sk, (void*) write_buf, l+1), "myAPI: writeFile: writen");
     
     ec_null_err(f=fopen(pathname,"r"), "myAPI: writeFile: fopen");
-    ec_null(cont=malloc(256*sizeof(char)), "myAPI: writeFile: malloc cont");
+    ec_null(cont=malloc(1024*sizeof(char)), "myAPI: writeFile: malloc cont");
+    ec_null(temp=malloc(256*sizeof(char)), "myAPI: writeFile: malloc cont");
     
-    ec_null(fgets(cont, 256, f), "myAPI: writeFile: fgets");
-    printf("\n\n\ncont=%s\n\n\n", cont);
+    while(fgets(temp, 256, f)!=NULL){
+        int l=strlen(temp);
+        strncat(cont, temp, l+1);
+
+    }
+    free(temp);
     ec_div_zero(fclose(f), "saveFile: fclose");
     if(cont!=NULL) l=strlen(cont);
     else l=0;
@@ -652,6 +652,7 @@ int writeFile(const char* pathname, const char* dirname){
     if(strcmp(read_buf, "OK")!=0){
         free(write_buf);
         free(read_buf);
+        free(cont);
         perror("myAPI: writeFile: il Server ha detto no");
         errno=EBADMSG;
         return -1;
@@ -686,6 +687,7 @@ int writeFile(const char* pathname, const char* dirname){
     
     free(write_buf);
     free(read_buf);
+    free(cont);
     int r=reset_o(&q, pathname);
     if(r==1){
         perror("myAPI: writeFile: reset_o");
@@ -697,7 +699,6 @@ int writeFile(const char* pathname, const char* dirname){
         errno=ESPIPE;
         return -1;
     }
-    printf("writefile ok\n");
     return 0;
 }
 int appendToFile(const char* pathname, void* buf, size_t size, const char* dirname){
@@ -813,7 +814,6 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
         free(read_buf);
         return -1;
     }
-    printf("append ok\n");
     free(write_buf);
     free(read_buf);
     return 0;
@@ -829,51 +829,13 @@ int unlockFile(const char* pathname){
     return -1;
 }
 int closeFile(const char* pathname){
-    /*
-    char* write_buf;
-    char* read_buf;
-    int l;
-    ec_null(write_buf=malloc(7*sizeof(char)), "myAPI: closeFile: malloc write_buf");
-    ec_null(read_buf=malloc(100*sizeof(char)), "myAPI: closeFile: malloc read_buf");
 
-    strncpy(write_buf, "closeF", 7);
-    
-    //mando al server l'operazione e il serve risponde
-    ec_meno1_err(writen(fd_sk, (void*) write_buf, 7), "myAPI: closeFile: writen");
-    ec_meno1_err(readn(fd_sk, (void*) read_buf, 3), "myAPI: closeFile: readn");
-    if(strcmp(read_buf, "OK")!=0){
-        free(write_buf);
-        free(read_buf);
-        perror("myAPI: closeFile: operazione non andata a buon fine");
-        errno=EBADMSG;
-        return -1;
-        }
-
-    l=strlen(pathname);
-    strncpy(write_buf, pathname, l+1);
-    
-    ec_meno1_err(writen(fd_sk, &l, sizeof(int)), "myAPI: closeFile: writen");
-    ec_meno1_err(writen(fd_sk, (void*) write_buf, strlen(pathname)+1), "myAPI: closeFile: writen");
-    
-    ec_meno1_err(readn(fd_sk, (void*) read_buf, 3), "myAPI: closeFile: readn");
-    if(strcmp(read_buf, "OK")!=0){
-        free(write_buf);
-        free(read_buf);
-        perror("myAPI: closeFile: operazione non andata a buon fine");
-        errno=EBADMSG;
-        return -1;
-        }
-
-    free(write_buf);
-    free(read_buf);
-    */
     if(check_o(&q, pathname)==-1){
         perror("closeFile: File non aperto");
         errno=EBADF;
         return -1;
     }
     pop(&q, pathname);
-    printf("closefile ok\n");
     return 0;
 }
 
@@ -891,14 +853,10 @@ int timeout(const struct timespec abstime){
     int timeout=0;
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);
-    //printf("ab-tvsec=%ld, now-tvsec=%ld\n", abstime.tv_sec, now.tv_sec);
     if(abstime.tv_sec>=now.tv_sec){
-        //printf("ab-tvnsec=%ld, now-tvnsec=%ld\n", abstime.tv_nsec, now.tv_nsec);
         if(abstime.tv_nsec>=now.tv_nsec){
-            //printf("not timeout\n");
             return timeout;}
     }
-    //printf("timeout\n");
     return !timeout;
 }
 
@@ -936,10 +894,8 @@ void push(c_f **q, const char* pathname){
     if(empty==1){ //sono il primo
 
         c_f* nuovo;
-        //ec_null(*q=malloc(sizeof(c_f)), "S-Master: errore malloc: nuovo");
-        *q=malloc(sizeof(c_f));
-        //ec_null((*q)->nome=malloc((strlen(pathname)+1)*sizeof(char)), "S-Master: errore malloc: nuovo");
-        (*q)->nome=malloc((strlen(pathname)+1)*sizeof(char));
+        ec_null_v(*q=malloc(sizeof(c_f)), "S-Master: errore malloc: nuovo");
+        ec_null_v((*q)->nome=malloc((strlen(pathname)+1)*sizeof(char)), "S-Master: errore malloc: nuovo");
         strncpy((*q)->nome, pathname, strlen(pathname)+1);
         (*q)->op=1;
         (*q)->next=NULL;
@@ -948,9 +904,9 @@ void push(c_f **q, const char* pathname){
     else{
         c_f* nuovo;
         c_f* curr;
-        //ec_null(nuovo=malloc(sizeof(c_f)), "S-Master: errore malloc: nuovo");
+        ec_null_v(nuovo=malloc(sizeof(c_f)), "S-Master: errore malloc: nuovo");
         nuovo=malloc(sizeof(c_f));
-        //ec_null(nuovo->nome=malloc((strlen(pathname)+1)*sizeof(char)), "S-Master: errore malloc: nuovo");
+        ec_null_v(nuovo->nome=malloc((strlen(pathname)+1)*sizeof(char)), "S-Master: errore malloc: nuovo");
         nuovo->nome=malloc((strlen(pathname)+1)*sizeof(char));
         strncpy(nuovo->nome, pathname, strlen(pathname)+1);
         nuovo->next=NULL;
@@ -1026,7 +982,7 @@ int clean_q(c_f **q){
     c_f* curr;
     c_f *next;
     curr=*q;
-    
+    if(curr==NULL) return -1;
     while(curr!=NULL){
         next=curr->next;
         free(curr->nome);
@@ -1045,7 +1001,6 @@ int check_p(const char* pathname){
 }
 
 int check_d(const char* dirname){
-    //if(dirname[0]!='/') return -1;
     int l;
     l=strlen(dirname);
     if(dirname[l]=='/') return -1;
@@ -1054,8 +1009,6 @@ int check_d(const char* dirname){
 }
 
 int saveFile(char* no, const char* buf, const char* dirname, const char* op){
-    printf("\n\nentro in savefile: ");
-    FILE *newfile;
     char *cwd;
     struct stat info;
     char *nome;
@@ -1069,27 +1022,20 @@ int saveFile(char* no, const char* buf, const char* dirname, const char* op){
         errno=ENOTDIR;
         return -1;
     }
-    if(no[0]=='/'){
-        int l_n=strlen(no);
-        if((nome=malloc(l_n*sizeof(char)))==NULL){
-            perror("saveFile: malloc n");
-            errno=ENOMEM;
-            return -1;
-        }
-        for(int i=0; i<l_n-1; i++){
-            nome[i]=no[i+1];
-            
+    int l_no=strlen(no);
+    int i=0;
+    while(no[l_no-i]!='/')
+        i++;
+    i--;
+    int l_nome=i+1;
+    if((nome=malloc(l_nome*sizeof(char)))==NULL){
+        perror("saveFile: malloc nome");
+        return -1;
     }
-        nome[l_n-1]='\0';
-    }
-    else{
-        int l_n=strlen(no)+1;
-        if((nome=malloc(l_n*sizeof(char)))==NULL){
-            perror("saveFile: malloc n");
-            errno=ENOMEM;
-            return -1;
-        }
-        strncpy(nome, no, l_n);
+    
+    while(i>=0){
+        nome[l_nome-i-1]=no[l_no-i];
+        i--;
     }
     if((cwd=malloc(20*sizeof(char)))==NULL){
         perror("saveFile: malloc: cwd");
@@ -1142,12 +1088,14 @@ int saveFile(char* no, const char* buf, const char* dirname, const char* op){
         errno=EINTR;
         return -1;
     }
+    FILE *newfile;
     ec_null_err(newfile=fopen(nome,"a"), "saveFile: fopen");
+    if(newfile!=NULL){
+        if(buf!=NULL) fwrite(buf, sizeof(char), strlen(buf), newfile);
+        if(buf!=NULL) fwrite("\n", sizeof(char), 1, newfile);
+        ec_div_zero(fclose(newfile), "saveFile: fclose");
+    }
     
-    if(buf!=NULL) fwrite(buf, sizeof(char), strlen(buf)+1, newfile);
-    if(buf!=NULL) fwrite("\n", sizeof(char), 1, newfile);
-    ec_div_zero(fclose(newfile), "saveFile: fclose");
-
     if(chdir(cwd)==-1){
         perror("saveFile: chdir(cwd)");
         free(cwd);
@@ -1155,9 +1103,7 @@ int saveFile(char* no, const char* buf, const char* dirname, const char* op){
         errno=EINTR;
         return -1;
     }
-    //printf(" qui ci arrivo: ");
     free(cwd);
     free(nome);
-    //printf("cwd=%s\n", cwd);
-    //printf("e pure qui\n");
+    return 1;
 }
