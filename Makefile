@@ -6,7 +6,7 @@ CON2 = ./configurazioni/config2.txt
 NOMES = ./Server.c
 NOMEC = ./Client.c
 
-.PHONY: all server.o client.o ./lib/myAPI.o ./lib/mylib.o ./lib/icl_hash.o ./lib/parser.o test1 test2 client test2val test3 clean
+.PHONY: all server.o client.o ./lib/myAPI.o ./lib/mylib.o ./lib/icl_hash.o ./lib/parser.o test1 test2 clean1 clean2
 
 all: server.o client.o
 	
@@ -35,33 +35,27 @@ client.o: ./lib/myAPI.o ./lib/parser.o
 	@ar rvs libp.a ./lib/parser.o
 
 
-client:
-	@$(VALGRIND) ./client.o &
-	@#$(VALGRIND) ./client.o &
-
-
 test1:
-	@$(VALGRIND) ./server.o $(CON1) & echo $$! > t1.PID &
-	@sleep 15; \
-	kill -1 $$(cat t1.PID); \
+	@$(VALGRIND) ./server.o $(CON1) & echo $$! > t1.PID &\
+	sleep 1;
+	@bash ./script1.sh;
+	@kill -1 $$(cat t1.PID); \
 
 
 test2:
-	@(./server.o $(CON2) 2 & echo $$! > t2.PID) &
-	@sleep 15; \
-	kill -1 $$(cat t2.PID); \
+	@(./server.o $(CON2) & echo $$! > t2.PID) &\
+	sleep 1;
+	@bash ./script2.sh;
+	@kill -1 $$(cat t2.PID); \
 
-test2val:
-	@$(VALGRIND) ./server.o $(CON2) & echo $$! > t2.PID &
-	@sleep 10; \
-	#kill -1 $$(cat t2.PID); 
-	@kill -3 $$(cat t2.PID); \
+clean1:
+	@rm -f *.o libmyl.a libmyA.a libicl.a libp.a ./lib/mylib.o ./lib/myAPI.o ./lib/icl_hash.o ./lib/parser.o mysock* *.PID  logFile1.log
+	@rm -f ./dir_l/*.txt ./dir_s/*.txt ./file/*.txt ./file_o/*.txt 
+	@rm -d  ./dir_l ./dir_s ./file ./file_o   
 
-test3:
-	@$(VALGRIND) ./server.o $(CON2) & echo $$! > t2.PID &
-	@$(VALGRIND) ./client.o &
-	@sleep 3; \
-	kill -1 $$(cat t2.PID); \
+clean2:
+	@rm -f *.o libmyl.a libmyA.a libicl.a libp.a ./lib/mylib.o ./lib/myAPI.o ./lib/icl_hash.o ./lib/parser.o mysock* *.PID  logFile2.log
+	@rm -f ./dir_l1/*.txt ./dir_s1/*.txt ./file1/*.txt ./file_o1/*.txt ./dir_l2/*.txt ./dir_s2/*.txt ./file2/*.txt ./file_o2/*.txt
+	@rm -f ./dir_l3/*.txt ./dir_s3/*.txt ./file3/*.txt ./file_o3/*.txt
+	@rm -d ./dir_l1 ./dir_s1 ./file1 ./file_o1   ./dir_l2 ./dir_s2 ./file2 ./file_o2   ./dir_l3 ./dir_s3 ./file3 ./file_o3
 
-clean:
-	@rm -f *.o libmyl.a libmyA.a libicl.a libp.a ./lib/mylib.o ./lib/myAPI.o ./lib/icl_hash.o ./lib/parser.o mysock* *.PID ./dir/*.txt output
