@@ -1,5 +1,5 @@
 NFILE=10
-DIM=50
+DIM=1000000
 NT=4
-./logFile.log
-./mysock
+./logFile2.log
+./mysock.sk
