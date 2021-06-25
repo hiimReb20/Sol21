@@ -17,7 +17,6 @@ coda* q;
 
 void cleanup();
 
-//static void gestore(int signum);
 
 static void* waiting_sig(void* argum);
 
@@ -33,43 +32,41 @@ int main(int argc, char* argv[]){
     int mypipe[2];
     arg* args;
     arg_sig a;
-    //cleanup();
     atexit(cleanup);
     pthread_t* workers;
     pthread_t sig_th;
     
-    printf("%d %d %d, sock=%s, log=%s\n", c->NFILE, c->DIM, c->NT, c->sock, c->fileLog);
-
-    char* sockname;
-    ec_null(sockname=malloc(20*sizeof(char)), "S-Master: malloc: sockname");
-
+    
+    //CREAZIONE MASCHERA SEGNALI, CREAZIONE THREAD GUARDIA SEGNALI, ecc..
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);
-    //sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGQUIT);
     ec_div_zero((pthread_sigmask(SIG_BLOCK, &mask, NULL)), "S-Master: errore pthread_sigmask");
-
     struct sigaction s;
     memset(&s, 0, sizeof(s));
     s.sa_handler=SIG_IGN;
     ec_meno1_err((sigaction(SIGPIPE, &s, NULL)), "S-Master: errore sigaction: SIGPIPE");
 
-    struct sockaddr_un ad;
-    strncpy(ad.sun_path, c->sock, PMAX);
-    //strncpy(ad.sun_path, "./mysock", PMAX);
-    ad.sun_family=AF_UNIX;
+    //CREAZIONE SOCKET
     int fd_sk, fd_c, fd_num=0, fd, fd_min;
     int nread;
     fd_set set, rdset;
-
+    struct sockaddr_un ad;
+    strncpy(ad.sun_path, c->sock, PMAX);
+    ad.sun_family=AF_UNIX;
     ec_meno1_err((fd_sk=socket(AF_UNIX, SOCK_STREAM, 0)), "S-Master: errore socket");
     ec_meno1_err(bind(fd_sk, (struct sockaddr*)&ad, sizeof(ad)), "S-Master: errore bind");
     ec_meno1_err(listen(fd_sk, SOMAXCONN), "S-Master: errore nella listen");
     
+    //CREAZIONE PIPE
     ec_meno1_err(pipe(mypipe), "S-Master: errore pipe");
 
+    //INIZIALIZZAZIONE TABELLA HASH
     ec_null(ht=hash_create(NB, NULL, NULL, c->NFILE, c->DIM), "S-Master_num);r: errore hash_create");
+    
+    //CREAZIONE THREAD-WORKERS
     ec_null(workers=malloc(c->NT*sizeof(pthread_t)), "S-Master: errore malloc: workers");
     ec_null(args=malloc(c->NT*sizeof(arg)), "S-Master: errore malloc: args");
     for(int i=0; i<c->NT; i++){
@@ -82,6 +79,7 @@ int main(int argc, char* argv[]){
     a.m=&mask;
     ec_div_zero(pthread_create(&sig_th, (void*)NULL, &waiting_sig, &a), "S-Master: errore pthread_create");
 
+    //GESTIONE FILE DESCRIPTORS
     if(fd_sk>fd_num) fd_num=fd_sk;
     if(mypipe[0]>fd_num) fd_num=mypipe[0];
     FD_ZERO(&set);
@@ -89,10 +87,9 @@ int main(int argc, char* argv[]){
     FD_SET(mypipe[0], &set);
     fd_min=fd_num;
 
+    //INIZIO CICLO SERVER
     while(!stop){
-        
         rdset=set;
-        //ec_meno1_err((select(fd_num+1, &rdset, NULL, NULL, NULL)), "S-Master: errore  select");
         int i;
         while(((i=select(fd_num+1, &rdset, NULL, NULL, NULL))==-1) && (errno==EINTR));
         for(fd=0; fd<=fd_num; fd++){
@@ -101,6 +98,8 @@ int main(int argc, char* argv[]){
                     ec_meno1_err((fd_c=accept(fd_sk, NULL, 0)), "S-Master: errore accept");
                     FD_SET(fd_c, &set);
                     if(fd_c>fd_num) fd_num=fd_c;
+                    stampa_conn(fd_c);
+
                 }
                 else if(fd==mypipe[0]){
                     int thisfd;
@@ -115,7 +114,6 @@ int main(int argc, char* argv[]){
                     else if(thisfd==-2){
                         Lock(&mtx_fd, "S-Master: errore lock");
                         push_in_testa(&q, -2);
-                        printf("fatto push -2\n");
                         Signal(&cond_fd, "S-Master: errore signal");
                         Unlock(&mtx_fd, "S-Master: errore unlock");
                         stop=1;
@@ -139,25 +137,24 @@ int main(int argc, char* argv[]){
     
     for(int i=0; i<c->NT; i++){
         ec_div_zero(pthread_join(workers[i], NULL), "S-Master: errore join");
-        //free(workers[i]);
     }
     ec_div_zero(pthread_join(sig_th, NULL), "S-Master: errore join");
-    printf("fd_min=%d, fd_num=%d\n", fd_min, fd_num);
+    
     for(int i=fd_min+1; i<=fd_num; i++){
         ec_meno1_err(writen(i, "NO", 3), "S-Master: writen");
         close(i);
     }
     close(fd_sk);
+    chiusura(ht);
     hash_destroy(ht, free,free);
     if(empty!=1) clean_coda(&q);
     free(args);
     free(q);
     free(workers);
-    free(sockname);
-    //cleanup();
     
     close(mypipe[0]);
     close(mypipe[1]);
+
     return 0;
 }
 
@@ -167,7 +164,6 @@ void cleanup(){
     free(c->fileLog);
     free(c->sock);
     free(c);
-    //unlink("mysock");
 }
 static void* waiting_sig(void* argum){
     arg_sig a=*(arg_sig*)argum;
@@ -181,8 +177,7 @@ static void* waiting_sig(void* argum){
         fd=-1;
         ec_meno1_err(writen(a.fd_p, &fd, sizeof(int)), "Worker: writen");
     }
-    else if(sig==SIGQUIT){
-        printf("wait_sig: arrivato lui\n");
+    else if((sig==SIGQUIT) || (sig==SIGINT)){
         fd=-2;
         ec_meno1_err(writen(a.fd_p, &fd, sizeof(int)), "Worker: writen");
     }
@@ -204,7 +199,6 @@ static void* work(void* argum){
         Signal(&cond_fd, "Worker: errore signal");
         Unlock(&mtx_fd, "Worker: errore unlock");
         if((fd==-1) || (fd==-2)){
-            printf("Work-%d, visto %d\n", a.i, fd);
             free(write_buf);
             free(read_buf);
             close(a.fd_w);
@@ -216,8 +210,8 @@ static void* work(void* argum){
         
         if(strncmp(read_buf, "closeC", 7)==0){
             ec_meno1(writen(fd, (void*)"OK", 3), "Worker: writen");
+            stampa_close(fd);
             close(fd);
-            printf("Worker-%d: %s fatta\n", a.i, read_buf);
             }
         
         else if(strncmp(read_buf, "openF", 7)==0){
@@ -234,18 +228,10 @@ static void* work(void* argum){
 
         else if(strncmp(read_buf, "writeF", 7)==0){
             writeF(fd, a.fd_w, a.i, ht);
-            //printf("Write\n");
-            //print(ht);
         }
         else if(strncmp(read_buf, "append", 7)==0){
             append(fd, a.fd_w, a.i, ht);
-            //printf("Append\n");
-            //print(ht);
         }
-        /*else if(strncmp(read_buf, "closeF", 7)==0){
-            closeF(fd, a.fd_w, a.i, ht);
-            
-        }*/
         else{
             ec_meno1(writen(fd, (void*)"NO", 3), "S-Master: writen");
         }      
