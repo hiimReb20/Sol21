@@ -70,7 +70,11 @@ conf* myconf (char* conffile){
 
 
     ec_div_zero(fclose(f), "Errore fclose in myconf");
-    
+        //APERTURA FILE DI LOG
+    if((flog=fopen(c->fileLog, "a"))==NULL){
+        perror("S-Master: fopen file di log");
+        exit(EXIT_FAILURE);
+    }
     return c;
 }
 
@@ -89,9 +93,9 @@ int max_fd(fd_set set, int fd_max){
 
 
 
-//inserisce in coda
+
 void push(coda **q, int fd){
-    if(empty==1){ //sono il primo
+    if(empty==1){
 
         coda* nuovo;
         ec_null(*q=malloc(sizeof(coda)), "S-Master: errore malloc: nuovo");
@@ -113,7 +117,7 @@ void push(coda **q, int fd){
 }
 
 
-//inserisce in testa;
+
 void push_in_testa(coda **q, int fd){
     if(empty==1){ //sono il primo
 
@@ -236,6 +240,12 @@ void openF(int fd, int fd_w, int i, myhash *ht){
     }
     
     Unlock(&mtx_h, "openF: unlock");
+
+    Lock(&mtx_log, "lock mtx_log");
+    fprintf(flog,"openFile | file=%s | byte scritti=0 | rimpiazzo=no | byte inviati al client=0 | vittima=nessuna\n\n", com);
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");
+
     free(com);
     ec_meno1_err(writen(fd_w, &fd, sizeof(int)), "Worker: writen");
 }
@@ -261,11 +271,13 @@ void readFi(int fd, int fd_w, int i, myhash *ht){
     }
     else{
         ec_meno1(writen(fd, (void*)"OK", 3), "Worker: writen");
+        data=hash_ret_data(ht, com);
         char* d=(char*)data;
         //calcolo la lunghezza del cobtenuto che dovrò mandare e gliela mando
-        g=strlen(d);
+        if(data==NULL) g=0;
+        else g=strlen(d);
         ec_meno1(writen(fd, &g, sizeof(int)), "Worker: writen");
-        ec_meno1(writen(fd, data, g+1), "Worker: writen");
+        if(g!=0) ec_meno1(writen(fd, data, g+1), "Worker: writen");
         if(hash_set_open(ht, com)!=0){
                 Unlock(&mtx_h, "writeF: unlock");
                 perror("Worker: hash_insert");
@@ -275,7 +287,10 @@ void readFi(int fd, int fd_w, int i, myhash *ht){
         Unlock(&mtx_h, "openF: unlock");
         ec_meno1_err(writen(fd, (void*)"OK", 3), "Worker: writen");
     }
-    
+    Lock(&mtx_log, "lock mtx_log");
+    fprintf(flog,"readFile | file=%s | byte scritti=0 | rimpiazzo=no | byte inviati al client=%d | vittima=nessuna\n\n", com, g);
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");
     free(com);       
     ec_meno1_err(writen(fd_w, &fd, sizeof(int)), "Worker: writen");
 }
@@ -305,6 +320,10 @@ void readNF(int fd, int fd_w, int i, myhash *ht){
                 ec_meno1_err(writen(fd, curr->k, l_n+1), "Worker: writen");
                 if(curr->data!=NULL) ec_meno1_err(writen(fd, curr->data, l_c+1), "Worker: writen");
                 j++;
+                Lock(&mtx_log, "lock mtx_log");
+                fprintf(flog,"readNFile | file=%s | byte scritti=0 | rimpiazzo=no | byte inviati al client=%d | vittima=nessuna\n\n", curr->k, l_c);
+                fflush(flog);
+                Unlock(&mtx_log, "unlock mtx_log");
             }
         }
     }
@@ -325,12 +344,9 @@ void writeF(int fd, int fd_w, int i, myhash *ht){
     ec_null(com=malloc((l+1)*sizeof(char)), "Worker: malloc com");
     ec_meno1_err(readn(fd, com, l+1), "Worker: readn");
     ec_meno1_err(readn(fd, &l, sizeof(int)), "Worker: readn");
-    printf("com=%s\n", com);
-    printf("l=%d\n", l);
     if(l!=0){
         ec_null(cont=malloc((l+1)*sizeof(char)), "Worker: malloc com");
         ec_meno1_err(readn(fd, cont, l+1), "Worker: readn");
-        printf("cont=%s\n", cont);
     }
     Lock(&mtx_h, "writeF: lock");
     if(hash_find(ht, com)==NULL){
@@ -360,7 +376,6 @@ void writeF(int fd, int fd_w, int i, myhash *ht){
                 return;}
         }
         else{
-            printf("ramo else\n");
             if(hash_update_insert(ht, com, cont)==NULL){
                 free(com);
                 if(l!=0) free(cont);
@@ -378,15 +393,26 @@ void writeF(int fd, int fd_w, int i, myhash *ht){
                 ec_meno1_err(writen(fd, (void*)"NO", 3), "Worker: writen");
                 ec_meno1_err(writen(fd_w, &fd, sizeof(int)), "Worker: writen");
                 return;}
-        ec_meno1_err(writen(fd, (void*)"OK", 3), "Worker: writen");
+    ec_meno1_err(writen(fd, (void*)"OK", 3), "Worker: writen");
+    Lock(&mtx_log, "lock mtx_log");
+    fprintf(flog,"writeFile | file=%s | byte scritti=%d\n", com, l);
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");
     free(com);
     if(l!=0) free(cont);
     
 	if((ht->nfile)>(ht->max_file)) {r=1;}
-	if((ht->dim)>(ht->max_dim)) {r=1;}
+	else if((ht->dim)>(ht->max_dim)) {r=1;}
+    else{
+        Lock(&mtx_log, "lock mtx_log");
+        fprintf(flog,"\t| rimpiazzo=no | byte inviati al client=0 | vittima=nessuna\n");
+        fflush(flog);
+        Unlock(&mtx_log, "unlock mtx_log");
+    }
     
     ec_meno1(writen(fd, &r, sizeof(int)), "Worker: writen");
     while(r==1){
+        rimpiazzi_totali++;
     	int l_n, l_c;
     	char *d;
         l_n=strlen(ht->key_min);
@@ -403,8 +429,15 @@ void writeF(int fd, int fd_w, int i, myhash *ht){
 	    else if(ht->dim>ht->max_dim) r=1;
         else r=0;
         ec_meno1(writen(fd, &r, sizeof(int)), "Worker: writen");
+        Lock(&mtx_log, "lock mtx_log");
+        fprintf(flog,"\t| rimpiazzo=si | byte inviati al client=%d | vittima=%s\n", l_c, ht->key_min);
+        fflush(flog);
+        Unlock(&mtx_log, "unlock mtx_log");
         }
-            
+    Lock(&mtx_log, "lock mtx_log");
+    fprintf(flog,"\n");
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");    
 
     Unlock(&mtx_h, "openF: unlock");
     ec_meno1_err(writen(fd_w, &fd, sizeof(int)), "Worker: writen");
@@ -421,7 +454,6 @@ void append(int fd, int fd_w, int i, myhash *ht){
     ec_meno1_err(readn(fd, &l, sizeof(int)), "Worker: readn");
     ec_null(com=malloc((l+1)*sizeof(char)), "Worker: malloc com");
     ec_meno1_err(readn(fd, com, l+1), "Worker: readn");
-    //ec_meno1_err(writen(fd, (void*)"OK", 3), "Worker: writen");
     
     Lock(&mtx_h, "append: lock");
     if(hash_find(ht, com)==NULL){
@@ -455,13 +487,23 @@ void append(int fd, int fd_w, int i, myhash *ht){
                 return;}
         free (buf);
         ec_meno1_err(writen(fd, (void*)"OK", 3), "Worker: writen");
-     
+    Lock(&mtx_log, "lock mtx_log");
+    fprintf(flog,"appendToFile | file=%s | byte scritti=%ld\n", com, s+1);
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");
 
     if(ht->nfile>ht->max_file) {r=1;}
-	if(ht->dim>ht->max_dim) {r=1;}
+	else if(ht->dim>ht->max_dim) {r=1;}
+    else{
+        Lock(&mtx_log, "lock mtx_log");
+        fprintf(flog,"\t| rimpiazzo=no | byte inviati al client=0 | vittima=nessuna\n");
+        fflush(flog);
+        Unlock(&mtx_log, "unlock mtx_log");
+    }
     ec_meno1(writen(fd, &r, sizeof(int)), "Worker: writen");
 
     while(r==1){
+        rimpiazzi_totali++;
     	int l_n, l_c;
     	char *d;
         l_n=strlen(ht->key_min);
@@ -477,25 +519,47 @@ void append(int fd, int fd_w, int i, myhash *ht){
 	    else if(ht->dim>ht->max_dim) r=1;
         else r=0;
         ec_meno1(writen(fd, &r, sizeof(int)), "Worker: writen");
+        Lock(&mtx_log, "lock mtx_log");
+        fprintf(flog,"\t| rimpiazzo=si | byte inviati al client=%d | vittima=%s\n", l_c, ht->key_min);
+        fflush(flog);
+        Unlock(&mtx_log, "unlock mtx_log");
         }
+    Lock(&mtx_log, "lock mtx_log");
+    fprintf(flog,"\n");
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");
     Unlock(&mtx_h, "append: unlock");
     free(com);
     ec_meno1_err(writen(fd_w, &fd, sizeof(int)), "Worker: writen");
 }
 
-/*void closeF(int fd, int fd_w, int i, myhash *ht){
-    int l;
-    char *com;
-    ec_meno1(writen(fd, (void*)"OK", 3), "Worker: writen");
+void chiusura(myhash *ht){
+    int file_tot;
+    long dim_tot;
+    totali(&file_tot, &dim_tot);
+    Lock(&mtx_log, "lock mtx_log");
 
-    ec_meno1_err(readn(fd, &l, sizeof(int)), "Worker: readn");
-    ec_null(com=malloc((l+1)*sizeof(char)), "Worker: malloc com");
-    ec_meno1_err(readn(fd, com, l+1), "Worker: readn");
+    hash_dump(flog, ht);
 
-    ec_meno1(writen(fd, (void*)"OK", 3), "Worker: writen");
+    fprintf(flog, "Statistiche\nFile Totali=%d | Dimensione Totale=%ld | Rimpiazzi Totali=%d\n", file_tot, dim_tot, rimpiazzi_totali);
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");
+    if(fclose(flog)==-1){
+            perror("S-Master: fclose file di log");
+        }
+}
 
-    free(com);
-    ec_meno1_err(writen(fd_w, &fd, sizeof(int)), "Worker: writen");
-    
-    printf("Worker-%d: closeF fatta\n", i);
-}*/
+void stampa_conn(int n){
+    Lock(&mtx_log, "lock mtx_log");
+    fprintf(flog,"openConnection | fd=%d\n\n", n);
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");
+}
+
+
+void stampa_close(int n){
+    Lock(&mtx_log, "lock mtx_log");
+    fprintf(flog,"closeConnection | fd=%d\n\n", n);
+    fflush(flog);
+    Unlock(&mtx_log, "unlock mtx_log");
+}
