@@ -8,6 +8,17 @@
 extern "C"{
 #endif
 
+#define Lock(l, s) if(pthread_mutex_lock(l)!=0){ \
+    perror(s); \
+    pthread_exit((void*)EXIT_FAILURE); }
+
+#define Unlock(l, s) if(pthread_mutex_unlock(l)!=0){ \
+    perror(s); \
+    pthread_exit((void*)EXIT_FAILURE); }
+
+#define ec_null(r,s)        if((r)==NULL){perror(s); exit(EXIT_FAILURE);}
+
+
 typedef struct entry_s{
     char* k;
     char* data;
@@ -37,6 +48,12 @@ typedef struct hash_s{
 }myhash;
 
 
+static pthread_mutex_t mtx_log=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond_log=PTHREAD_COND_INITIALIZER;
+static int file_totali;
+static long dim_totale;
+static FILE *flog;
+
 myhash *hash_create(int nbuckets, unsigned int (*hash_function)(char*), int (*hash_key_compare)(char*, char*), int max_file, long max_dim);
 
 char *hash_find(myhash *ht, char* key);
@@ -57,6 +74,8 @@ int string_cmp(char* a, char* b);
 
 
 void print(myhash *ht);
+
+void totali(int *file_tot, long *dim_tot);
 
 #define hash_foreach(ht, tmpint, tmpent, kp, dp) \
     for(tmpint=0; tmpint<ht->nbuckets; tmpint++) \
