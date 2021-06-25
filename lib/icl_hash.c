@@ -1,410 +1,437 @@
-#include "./parser.h"
-static int empty=1;
-static char *sock=NULL;
-static char *dir_lettura=NULL;
-static char *dir_scrittura=NULL;
-static int tempo;
-static int flag_p=0;
-c_r *q_opt;
-void option_h(){
-    printf("File Storage Server: lista delle opzioni valide e relativi argomenti:\n\n");
-    printf("-o: n, filename1[,filename2,...]\n\tn, intero uguale a 1 o 2, NON OPZIONALE\n\t\tcon n=1 si intende flag=O_CREATE\n");
-    printf("\t\tcon n=2 si intende flag=O_LOCK (non supportato)\n\t\tcon n!=(1 V 2) si intende flag=NOFLAG, cioè come non specificato\n\n");
-    printf("\tfilename: lista di file\n\trichiesta di aprire filename con flag n\n\n");
-    printf("-f:filename\n\tfilename:nome del socket a cui il client deve connettersi\n\n");
-    printf("-w:dirname[,n]\n\tdirname:nome di una directory\n\tn: intero>=0, opzionale\n");
-    printf("\tinvia al server i file contenuti in dirname\n");
-    printf("\tse dirname contiene altre directories, queste vengono visitate ricorsivamente fino ad aver scritto n files\n");
-    printf("\tse n=0 o assente, non c'è limite superiore ai files da inviare\n\n");
-    printf("-W:file1[,file2,...]\n\tfile:lista di file da scrivere nel server\n\ti file devono essere separati solo e soltanto da ','\n\n");
-    printf("-D: dirname\n\tdirname: cartella in cui salvare i file inviati dal server a causa di capacity misses\n\n");
-    printf("-r: file1[,file2]\n\tfile: lista di file da leggere\n\ti file devono essere separati solo e soltanto da ','\n\n");
-    printf("-R: [n]\n\tn: intero>=0, opzionale\n\tlegge n file qualsiasi che siano memorizzati nel server\n");
-    printf("\tse n=0 o n assente, richiede di leggere tutti i file memorizzati nel server\n\n");
-    printf("-d: dirname\n\tdirname: cartella\n\tspecifica la cartella in cui memorizzare i file letti\n\n");
-    printf("-t: time\n\ttime:intero>=0\n\tspecifica il tempo (in ms) che deve intercorrere tra due richieste successive del client al server\n\tse l'opzione non è speciifcata questo tempo va inteso =0\n\n");
-    printf("-a: filename,string\n\tfilename: nome file\n\ts: stringa\n");
-    printf("\tscrive in append la stringa s al file filename\n\n");
-    printf("-p: non accetta argomenti\n\tabilita le stampe sullo stdout per ogni operazione\n\ti dettagli delle operazioni da stampare comprendono\n");
-    printf("\t\ttipo di operazione\n\t\tfile di riferimento\n\t\tesito\n\t\tbytes scritti\n");
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+
+#include "icl_hash.h"
+
+#include <limits.h>
+
+#define BITS_IN_int (sizeof(int) * CHAR_BIT)
+#define THREE_QUARTERS ((int) ((BITS_IN_int * 3) /4))
+#define ONE_EIGHTH ((int) (BITS_IN_int / 8))
+#define HIGH_BITS ( ~((unsigned int)(~0) >> ONE_EIGHTH))
+
+/*
+*A simple string hash
+*param[in] key -- the string to be hashed
+*returns the hash index
+*/
+unsigned int hash_pjw(char* key){
+    char *datum = (char *)key;
+    unsigned int hash_value, i;
     
+    if(!datum) return 0;
+
+    for(hash_value=0; *datum;++datum){
+        hash_value=(hash_value << ONE_EIGHTH) + *datum;
+        if((i=hash_value & HIGH_BITS)!=0)
+            hash_value=(hash_value ^ (i >> THREE_QUARTERS)) & ~HIGH_BITS;
+    }
+    return (hash_value);
 }
 
-void option_f(char* optarg){
-           int l=strlen(optarg)+1;
-           sock=malloc(l*sizeof(char));
-           if(sock==NULL){
-               perror("malloc sock");
-               exit(EXIT_FAILURE);
-           }
-           strncpy(sock, optarg, l);
+int string_cmp(char* a, char* b){
+    return (strcmp((char*)a, (char*)b)==0);
 }
 
-void option_w(char *optarg){
-    char b[256];
-    int n;
-    char *state;
-    char *token, *dir;
-    token=strtok_r(optarg, ",", &state);
-    dir=token;
-    token = strtok_r(NULL, ",", &state);
-    if(token!=NULL) {
-        n=atoi(token);
-        if(n<0) n=0;
+
+/*
+* Create a new hash table.
+*nbuckets -- number of buckets to create
+*hash_function -- pointer to the hashing function to be used
+*hash_key_compare -- pointer to the hash key comparison function to be used
+*returns pointer to new hash table.
+ */
+myhash *hash_create(int nbuckets, unsigned int (*hash_function)(char*), int (*hash_key_compare)(char*, char*), int max_file, long max_dim){
+    myhash *ht;
+    int i;
+    ht=(myhash*)malloc(sizeof(myhash));
+    if(!ht) return NULL;
+    
+    ht->nentries=0;
+    ht->min=0;
+    ht->max=0;
+    ht->key_min=NULL;
+    ht->key_max=NULL;
+    ht->nfile=0;
+    ht->dim=0;
+    ht->max_dim=max_dim;
+    ht->max_file=max_file;
+    ht->buckets=(entry**)malloc(nbuckets*sizeof(entry*));
+    if(!ht->buckets) return NULL;
+
+    ht->nbuckets=nbuckets;
+    for(i=0; i<ht->nbuckets; i++)
+        ht->buckets[i]=NULL;
+    
+    ht->hash_function=hash_function ? hash_function : hash_pjw;
+    ht->hash_key_compare=hash_key_compare ? hash_key_compare : string_cmp;
+    file_totali=0;
+    dim_totale=0;
+    return ht;
+}
+
+
+/*
+*search for an entry in a has table
+*ht -- the hash table to be searched
+*key -- the key of the item to search for
+*returns pointer to te data corresponding to the key or null
+*/
+char *hash_find(myhash *ht, char* key){
+    entry* curr;
+    unsigned int hash_val;
+
+    if(!ht || !key) return NULL;
+    
+    hash_val=(*ht->hash_function)(key) % ht->nbuckets;
+
+    for(curr=ht->buckets[hash_val]; curr!=NULL; curr=curr->next)
+        if(ht->hash_key_compare(curr->k, key)){
+        return(curr->k);
         }
-    else n=0;
-    push_opt(&q_opt, 1, dir, NULL, n);
+    return NULL;
 }
 
-void option_W(char* optarg){
-    char b[256];
-    char *state;
-    char *token = strtok_r(optarg, ",", &state);
-    while(token){
-        push_opt(&q_opt, 1, token, NULL, -1);
-        token = strtok_r(NULL, ",", &state); 
+
+char *hash_ret_data(myhash *ht, char* key){
+    entry* curr;
+    unsigned int hash_val;
+
+    if(!ht || !key) return NULL;
+    
+    hash_val=(*ht->hash_function)(key) % ht->nbuckets;
+
+    for(curr=ht->buckets[hash_val]; curr!=NULL; curr=curr->next)
+        if(ht->hash_key_compare(curr->k, key))
+        return(curr->data);
+    
+    return NULL;
+}
+
+
+/*
+* Insert an item into the hash table.
+* @param ht -- the hash table
+* @param key -- the key of the new item
+* @param data -- pointer to the new item's data
+* @returns pointer to the new item.  Returns NULL on error.
+*/
+entry *hash_insert(myhash *ht, char* key, char* data){
+    entry *curr;
+    unsigned int hash_val;
+    if(!ht || !key) return NULL;
+
+    hash_val=(*ht->hash_function)(key) %ht->nbuckets;
+    for(curr=ht->buckets[hash_val]; curr!=NULL; curr=curr->next)
+        if(ht->hash_key_compare(curr->k, key))
+            return NULL;
+
+    curr=(entry*)malloc(sizeof(entry));
+    if(!curr) return NULL;
+    int l=strlen(key);
+    
+    if((curr->k=malloc((l+1)*sizeof(char)))==NULL){
+        perror("hash_insert: malloc key");
+        return NULL;
     }
-}
+    strncpy(curr->k, key, l+1);
+    curr->data=data;
+    curr->dim=0;
+    curr->last_op_was_open=1;
+    int rc = pthread_mutex_init(&curr->m, NULL); assert(rc == 0); 
+    rc = pthread_cond_init(&curr->c, NULL); assert(rc == 0);
+    curr->next=ht->buckets[hash_val]; //inserito in testa
+    ht->buckets[hash_val]=curr;
+    ht->nentries++;
 
-void option_r(char* optarg){
-    char b[256];
-    char *state;
-    char *token = strtok_r(optarg, ",", &state);
-    while(token){
-        push_opt(&q_opt, 2, token, NULL, -1);
-        token = strtok_r(NULL, ",", &state); 
-    }
-}
-
-void option_R(char* optarg){
-    char b[256];
-    int n;
-    char *state;
-    char *token;
-    token=strtok_r(optarg, ",", &state);
-    if(token!=NULL){
-        n=atoi(token);
-        if(n<0) n=0;
-    }
-    else n=0;
-    push_opt(&q_opt, 2, NULL, NULL, n);
-}
-
-void option_d(char* optarg){
-    if(dir_lettura!=NULL) free(dir_lettura);
-    int l=strlen(optarg)+1;
-    dir_lettura=malloc(l*sizeof(char));
-    if(dir_lettura==NULL){
-        perror("malloc dir_lettura");
-        exit(EXIT_FAILURE);
-        }
-    strncpy(dir_lettura, optarg, l);   
-}
-
-void option_D(char* optarg){
-    if(dir_scrittura!=NULL) free(dir_scrittura);
-    int l=strlen(optarg)+1;
-    dir_scrittura=malloc(l*sizeof(char));
-    if(dir_scrittura==NULL){
-        perror("malloc dir_scrittura");
-        exit(EXIT_FAILURE);
-        }
-    strncpy(dir_scrittura, optarg, l);}
-
-void option_t(char* optarg){
-    int n;
-    char *state;
-    char *token;
-    token=strtok_r(optarg, ",", &state);
-    if(token!=NULL){
-        n=atoi(token);
-        if(n>0) tempo=n;
-    }
-}
-
-void option_a(char *optarg){
-    char b[256];
-    int n;
-    char *state;
-    char *token, *s, *file;
-    token=strtok_r(optarg, ",", &state);
-    file=token;
-    token = strtok_r(NULL, ",", &state);
-    s=token;
-    push_opt(&q_opt, 3, file, s, -1);
-}
-
-void option_o(char *optarg){
-    char *state;
-    char *token, *file;
-    int n;
-    token=strtok_r(optarg, ",", &state);
-    n=atoi(token);
-    if((n!=1) && (n!=2) && (n!=0)) n=1;
-    token = strtok_r(NULL, ",", &state);
-    while(token){
-        push_opt(&q_opt, 0, token, NULL, n);
-        token = strtok_r(NULL, ",", &state);
-    }
-}
-
-void option_p(){
-    flag_p=1;
-}
-
-void push_opt(c_r **q, int op, char *rich, char* s, int n){
-    if(empty==1){ //sono il primo
-        ec_null_v(*q=malloc(sizeof(c_r)), "parser.h: errore malloc: nuovo");
-        (*q)->opt=op;
-        (*q)->n=n;
-        if(rich==NULL) (*q)->str=NULL;
-        else {
-            (*q)->str=malloc((strlen(rich)+1)*sizeof(char));
-            strncpy((*q)->str, rich, strlen(rich)+1);
-            }
-        if(s==NULL) (*q)->app=NULL;
-        else {
-            (*q)->app=malloc((strlen(s)+1)*sizeof(char));
-            strncpy((*q)->app, s, strlen(s)+1);
-            }
-        (*q)->next=NULL;
-        empty=0;
+    if(ht->key_min==NULL){
+        ht->key_min=curr->k;
+        ht->key_max=curr->k;
+        ht->min=1;
+        ht->max=1;
+        curr->n=1;
     }
     else{
-        c_r* nuovo;
-        c_r* prec;
-        c_r* curr;
-
-        ec_null_v(nuovo=malloc(sizeof(c_r)), "parser.h: errore malloc: nuovo");
-        nuovo->opt=op;
-        nuovo->n=n;
-        if(rich==NULL) nuovo->str=NULL;
-        else{
-            ec_null_v(nuovo->str=malloc((strlen(rich)+1)*sizeof(char)), "parser.h: errore malloc: str");
-            strncpy(nuovo->str, rich, strlen(rich)+1);
-            }
-        if(s==NULL) nuovo->app=NULL;
-        else{
-            ec_null_v(nuovo->app=malloc((strlen(s)+1)*sizeof(char)), "parser.h: malloc: app");
-            strncpy(nuovo->app, s, strlen(s)+1);
-            }
-        nuovo->next=NULL;
-        curr=*q;
-        prec=NULL;
-        while((curr!=NULL) && (nuovo->opt>=curr->opt)){
-            prec=curr;
-            curr=curr->next;
-            }
-        if(prec==NULL) *q=nuovo; 
-        else prec->next=nuovo;
-        nuovo->next=curr;
+        ht->max++;
+        curr->n=ht->max;
+        ht->key_max=curr->k;
+        
     }
-}
 
-//preleva in testa, restituisce 0 se la coda è vuota, -1 se non l'ha trovato, 1 se tutto è andato bene
-c_r *pop_opt(c_r **q){
-    c_r* curr;
-    curr=*q;
-    if(curr==NULL) return NULL;
-    if(curr->next==NULL)
-        *q=NULL;
-    else *q=curr->next;
-    return curr; 
-
-}
-
-void clean_coda_opt(c_r **q){
-    c_r* curr;
-    c_r* next;
-    curr=*q;
-    while(curr!=NULL){
-        next=curr->next;
-        free(curr->str);
-        free(curr);
-        curr=next;
-    }
-    *q=NULL;
-    
-}
-
-void stampa(c_r**q){
-    if(*q==NULL){
-        printf("coda vuota\n");
-        return;
-    }
-    c_r* curr;
-    curr=*q;
-    printf("stampa:\n");
-    while(curr!=NULL){
-        printf("opt=%d, str=%s, %s, s=n=%d\n", curr->opt, curr->str, curr->app, curr->n);
-        curr=curr->next;
-    }
-    printf("\n\n");
+    return curr;
 }
 
 
-int findFile(char *dirname, int n, int tro){
-    if(n==-1) return -1;
-    if(n==tro) return 0;
-    struct stat info;
-    if(stat(dirname, &info) ==-1){
-        perror("findFile: dirname non esiste");
-        return -1;
-    }
-    if(!S_ISDIR(info.st_mode)){
-        perror("findFile: dirname non è una directory");
-        return -1;
-    }
-    DIR* thisdir;
-    if((thisdir=opendir(dirname))==NULL){
-        perror("findFile: opendir");
-        return -1;
-    }
-    int t=0;
+/*
+ * Replace entry in hash table with the given entry.
+ * @param ht -- the hash table
+ * @param key -- the key of the new item
+ * @param data -- pointer to the new item's data
+ * @param olddata -- pointer to the old item's data (set upon return)
+ * @returns pointer to the new item.  Returns NULL on error.
+ */
+entry *hash_update_insert(myhash *ht, char* key, char* data){
+    entry *curr, *prev;
+    unsigned int hash_val;
     int stop=0;
-    struct dirent* thisread;
-    errno=0;
-    while(((errno=0, thisread=readdir(thisdir))!=NULL) &&(stop==0)){
-        if(thisread->d_ino!=0){
-            if((thisread->d_type==4) &&(strcmp(thisread->d_name, ".")!=0) && (strcmp(thisread->d_name, "..")!=0)){
-                char *newdir;
-                if((newdir=malloc((strlen(dirname)+strlen(thisread->d_name)+2)*sizeof(char)))==NULL){
-                    perror("findFile: malloc newdir");
-                    return -1;
+
+    if(!ht || !key) return NULL;
+    hash_val=(* ht->hash_function)(key) % ht->nbuckets;
+    prev=NULL;
+    curr=ht->buckets[hash_val];
+    
+	
+    while((curr!=NULL) && (stop==0)){
+        if(ht->hash_key_compare(curr->k, key)){
+            if(data!=NULL){
+            if(curr->data==NULL){
+                curr->data=malloc((strlen(data)+1)*sizeof(char));
+                if(curr->data==NULL){
+                    perror("hash_update_insert: malloc curr->data");
+                    return NULL;
                 }
-                strncpy(newdir, dirname, strlen(dirname)+1);
-                strncat(newdir, "/", 1);
-                strncat(newdir, thisread->d_name, strlen(thisread->d_name)+1);
-                int ret=0;
-                if((tro+t)!=n)
-                    ret=findFile(newdir, n, t+tro);
-                t+=ret;
-                if((t+tro)==n) stop=1;
-                free(newdir);
+
+                strncpy(curr->data,data,strlen(data)+1);
             }
-            else if(thisread->d_type==8){
-                int l=strlen(thisread->d_name);
-                if((((thisread->d_name[l-1])=='t')&&(thisread->d_name[l-2]=='x')&&(thisread->d_name[l-3]=='t')&&(thisread->d_name[l-4]=='.'))){
-                    char *newnome;
-                    if((newnome=malloc((strlen(dirname)+strlen(thisread->d_name)+2)*sizeof(char)))==NULL){
-                    perror("findFile: malloc newdir");
-                    return -1;
-                    }
-                    strncpy(newnome, dirname, strlen(dirname)+1);
-                    strncat(newnome, "/", 1);
-                    strncat(newnome, thisread->d_name, strlen(thisread->d_name)+1);
-                    openFile(newnome, O_CREATE);
-                    writeFile(newnome, dir_scrittura);
-                    free(newnome);
-                    t++;
-                    if((tro+t)==n) stop=1;
+            else{
+                int l=0, o=0;
+                char *olddata;
+                o=strlen(curr->data);
+                ec_null(olddata=malloc((o+1)*sizeof(char)), "hash_update_insert: malloc curr->data");
+                strncpy(olddata,curr->data, o+1);
+                ht->dim-=strlen(curr->data)+1;
+                free(curr->data);
+                l=o+strlen(data)+1;
+                curr->data=malloc(l*sizeof(char));
+                if(curr->data==NULL){
+                    perror("hash_update_insert: malloc curr->data");
+                    return NULL;
                 }
+                strncpy(curr->data,olddata,strlen(olddata)+1);
+                strncat(curr->data,data,strlen(data)+1);
+                free(olddata);
             }
+            stop=1;
+            curr->dim=strlen(curr->data)+1;
+            ht->dim+=strlen(curr->data)+1;
+            dim_totale+=strlen(curr->data)+1;
+            if(hash_check_w(ht, curr->k)==1)ht->nfile++;
+            curr->last_op_was_open=0;
+            }
+            else{
+            stop=1;
+            if(hash_check_w(ht, curr->k)==1)ht->nfile++;
+            curr->last_op_was_open=0;
+            }
+            file_totali++;
+        }
+        else{
+        	prev=curr, curr=curr->next;
         }
     }
-    if(errno!=0){
-        perror("findFile: readdir");
-        return -1;
-    }
-    
-    if(closedir(thisdir)==-1){
-        perror("findFile: closedir");
-        return -1;
-    }
-    return t;
+    return curr;
 }
 
-void run_client(){
-    c_r *richiesta;
-    struct timespec abstime;
-    struct timespec prevtime;
-    struct timespec intervallo;
-    
-    unsigned int seme=1;
-    int ran_sec, ran_nsec, msec, flags;
-    ran_sec=rand_r(&seme);
-    ++seme;
-    ran_nsec=rand_r(&seme);
-    ran_sec=(ran_sec%60)+60;
-    ran_nsec=(ran_nsec%10000);
-    clock_gettime(CLOCK_REALTIME, &prevtime);
-    abstime.tv_sec=prevtime.tv_sec+ran_sec;
-    abstime.tv_nsec=prevtime.tv_nsec+ran_nsec;
-    intervallo.tv_sec=tempo/1000;
-    intervallo.tv_nsec=(tempo%1000)*1.0e6;
-    
-    int op=openConnection(sock, tempo, abstime);
-    if(flag_p && (op!=-1)) printf("-f: Connessione con socket %s avvenuta con successo\n", sock);
-    else if(flag_p && (op==-1)) printf("-f: Connessione con socket %s fallita\n", sock);
 
-    //push_opt(&q, 3, NULL, -8);
-    richiesta=pop_opt(&q_opt);
-    while(richiesta!=NULL){
-        switch (richiesta->opt)
-        {
-        case 0:{
-            int o;
-            if(richiesta->n==1) o=openFile(richiesta->str, O_CREATE);
-            else if(richiesta->n==2)o=openFile(richiesta->str, O_LOCK);
-            else if(richiesta->n==0)o=openFile(richiesta->str, NOFLAG);
-            if(flag_p && (o!=-1)) printf("-o: Apertura di %s avvenuta con successo\n", richiesta->str);
-            else if(flag_p && (o==-1)) printf("-o: Apertura di %s fallita\n", richiesta->str);
-            
+/**
+ * Free one hash table entry located by key (key and data are freed using functions).
+ *ht -- the hash table to be freed
+ *key -- the key of the new item
+ *free_key -- pointer to function that frees the key
+ * free_data -- pointer to function that frees the data
+ *
+ *returns 0 on success, -1 on failure.
+ */
+int hash_delete(myhash *ht, char* key, void (*free_key)(void*), void (*free_data) (void*)){
+    entry *curr, *prev;
+    unsigned int hash_val;
+    int stop=0, era_min=0, era_max=0;
+
+    if(!ht || !key) return -1;
+    hash_val=(* ht->hash_function)(key) % ht->nbuckets;
+
+    prev=NULL;
+    curr=ht->buckets[hash_val];
+    while((curr!=NULL) && (stop==0)){
+        if(ht->hash_key_compare(curr->k, key)){
+        		if(ht->hash_key_compare(ht->key_max, key)){
+        			era_max=1;
+        		}
+        		if(ht->hash_key_compare(ht->key_min, key)){
+        			era_min=1;
+        		}
+            if(prev==NULL)
+                ht->buckets[hash_val]=curr->next;
+            else
+                prev->next=curr->next;
+            if(*free_key && curr->k) (*free_key) (curr->k);
+            if(*free_data && curr->data) (*free_data)(curr->data);
+            ht->nentries--;
+            ht->dim-=curr->dim;
+            free(curr);
+            stop=1;
         }
-            break;
-        case 1:{
-            if(richiesta->n>=0){
-                int f=findFile(richiesta->str, richiesta->n, 0);
-                if(flag_p && (f!=-1)) printf("-w: Scrittura di %d file presenti in %s avvenuta con successo\n", f, richiesta->str);
-                else if(flag_p && (f==-1)) printf("-w: Scrittura dei file presenti in %s fallita\n", richiesta->str);
-            }
-            else{
-                int w=writeFile(richiesta->str, dir_scrittura);
-                if(flag_p && (w!=-1)) printf("-W: Scrittura di %s avvenuta con successo\n",richiesta->str);
-                else if(flag_p && (w==-1)) printf("-W: Scrittura di %s fallita\n", richiesta->str);
-            }
+        else{
+		     prev=curr;
+		     curr=curr->next;
         }
-            break;
-        case 2:
-            if(richiesta->n<0){
-                char *b;
-                b=NULL;
-                size_t s;
-                int r=readFile(richiesta->str, (void**)&b, &s);
-                if(flag_p && (r==-1)) printf("-r: lettura di %s fallita\n", richiesta->str);
-                if(b!=NULL && (r!=-1)){
-                    int s=saveFile(richiesta->str, b, dir_lettura, "readF");
-                    if(flag_p && (s==-1)) printf("-r: lettura di %s avvenuta con successo. Salvataggio del file con contenuto '%s' in %s fallito\n", richiesta->str, b, dir_lettura);
-                    else if(flag_p && (s!=-1)) printf("-r: lettura di %s e salvataggio del file con contenuto '%s' in %s avvenuti con successo\n", richiesta->str, b, dir_lettura);
-                }   
-                else if(b==NULL && (r!=-1)){
-                    int s=saveFile(richiesta->str, NULL, dir_lettura, "readF");
-                    if(flag_p && (s==-1)) printf("-r: lettura di %s avvenuta con successo. Salvataggio del file vuoto in %s fallito\n", richiesta->str, dir_lettura);
-                    else if(flag_p && (s!=-1)) printf("-r: lettura di %s e salvataggio del file vuoto in %s avvenuti con successo\n", richiesta->str, dir_lettura);
+    }
+    if(curr==NULL) return -1;
+    
+    if(era_min && era_max){
+    	ht->min=0;
+    	ht->max=0;
+    	ht->key_min=NULL;
+    	ht->key_max=NULL;
+    }
+    else if(era_min && !era_max){
+        int min=ht->max+1;
+        for(int i=0; i<ht->nbuckets; i++){
+            for(curr=ht->buckets[i]; curr!=NULL;curr=curr->next){
+                if(curr->n<min){
+                    min=curr->n;
+                    ht->key_min=curr->k;
+
                 }
             }
-            else{
-                int R=readNFiles(richiesta->n, dir_lettura);
-                if(flag_p && (R!=-1)) printf("-R: Memorizzazione dei file del server in %s avvenuta con successo\n", dir_lettura);
-                else if(flag_p && (R==-1)) printf("-R: Memorizzazione dei file del server in %s fallita\n", dir_lettura);
-            }
-            break;
-        case 3:{
-                int a=appendToFile(richiesta->str, richiesta->app, strlen(richiesta->app), dir_scrittura);
-                if(flag_p && (a!=-1)) printf("-a: Append della stringa %s al file %s avvenuta con successo\n", richiesta->app, richiesta->str);
-                else if(flag_p && (a==-1)) printf("-a: Append della stringa %s al file %s  fallita\n", richiesta->app, richiesta->str);
-            }
-           break;
-        default:{
-            perror("run_client: opzione non valida");
-            }   
-            break;
         }
-        if(richiesta->str!=NULL) free(richiesta->str);
-        if(richiesta->app!=NULL) free(richiesta->app);
-        free(richiesta);
-        nanosleep(&intervallo, NULL);
-        richiesta=pop_opt(&q_opt);
+        ht->min=min;
     }
-    closeConnection(sock);
+    
+    else if(era_max && !era_min){
+        int max=ht->min-1;
+        for(int i=0; i<ht->nbuckets; i++){
+        		curr=ht->buckets[i];
+            while(curr!=NULL){
+                if(curr->n>max){
+                    max=curr->n;
+                    ht->key_max=curr->k;
+
+                }
+                curr=curr->next;
+            }
+        }
+        ht->max=max;
+    }
+    ht->nfile--;
+    return 0;
+}
+
+
+/* * Free hash table structures (key and data are freed using functions).
+ *
+ *ht -- the hash table to be freed
+ *free_key -- pointer to function that frees the key
+ * free_data -- pointer to function that frees the data
+ *
+ * @returns 0 on success, -1 on failure.
+ */
+int hash_destroy(myhash *ht, void (*free_key)(void*), void (*free_data)(void*)){
+    entry *bucket, *curr, *next;
+    int i;
+    if(!ht) return -1;
+    for(i=0; i<ht->nbuckets; i++){
+        bucket=ht->buckets[i];
+        for(curr=bucket; curr!=NULL; ){
+            next=curr->next;
+            if(*free_key && curr->k) (*free_key)((void*)curr->k);
+            if(*free_data && curr->data) (*free_data)((void*)curr->data);
+            free(curr);
+            curr=next;
+        }
+    }
+
+    if(ht->buckets) free(ht->buckets);
+    if(ht) free(ht);
+    return 0;
+}
+
+
+/*
+ * Dump the hash table's contents to the given file pointer.
+stream -- the file to which the hash table should be dumped
+ht -- the hash table to be dumped
+returns 0 on success, -1 on failure.
+ */
+
+int hash_dump(FILE *stream, myhash* ht){
+    entry *bucket, *curr;
+    int i;
+
+    if(!ht) return -1;
+
+    for(i=0; i<ht->nbuckets; i++){
+        bucket=ht->buckets[i];
+        for(curr=bucket; curr!=NULL; ){
+            if(curr->k)
+                fprintf(stream, "hash_dump: %s: %s\n", (char*)curr->k, curr->data);
+            curr=curr->next;
+        }
+    }
+    return 0;
+}
+
+
+int hash_check_w(myhash *ht, char* key){
+    entry* curr;
+    unsigned int hash_val;
+
+    if(!ht || !key) return -1;
+    
+    hash_val=(*ht->hash_function)(key) % ht->nbuckets;
+
+    for(curr=ht->buckets[hash_val]; curr!=NULL; curr=curr->next)
+        if(ht->hash_key_compare(curr->k, key)){
+            return curr->last_op_was_open;
+        }
+        
+    
+    return -1;
+}
+
+int hash_set_open(myhash *ht, char* key){
+    entry* curr;
+    unsigned int hash_val;
+
+    if(!ht || !key) return -1;
+    
+    hash_val=(*ht->hash_function)(key) % ht->nbuckets;
+
+    for(curr=ht->buckets[hash_val]; curr!=NULL; curr=curr->next)
+        if(ht->hash_key_compare(curr->k, key)){
+            curr->last_op_was_open=0;
+            return curr->last_op_was_open;
+        }
+        
+    
+    return -1;
+}
+
+void print(myhash *ht){
+	if(ht->key_min!=NULL && ht->key_max!=NULL)
+	printf("\nbuck=%d, nent=%d, min=%d, max=%d, key_min=%s, key_max=%s, dim=%ld, nfile=%d\n", ht->nbuckets, ht->nentries, ht->min, ht->max, ht->key_min, ht->key_max, ht->dim, ht->nfile);
+	else if(ht->key_min==NULL && ht->key_max!=NULL)
+		printf("\nbuck=%d, nent=%d, min=%d, max=%d, key_max=%s, dim=%ld, nfile=%d\n", ht->nbuckets, ht->nentries, ht->min, ht->max, ht->key_max, ht->dim, ht->nfile);
+	else if(ht->key_min!=NULL && ht->key_max==NULL)
+		printf("\nbuck=%d, nent=%d, min=%d, max=%d, key_min=%s, dim=%ld, nfile=%d\n", ht->nbuckets, ht->nentries, ht->min, ht->max, ht->key_min, ht->dim, ht->nfile);
+	else if(ht->key_min==NULL && ht->key_max==NULL)
+		printf("\nbuck=%d, nent=%d, min=%d, max=%d\n, dim=%ld, nfile=%d", ht->nbuckets, ht->nentries, ht->min, ht->max, ht->dim, ht->nfile);
+	for(int i=0; i<ht->nbuckets; i++){
+        entry *curr, *prev;
+        for(prev=NULL, curr=ht->buckets[i]; curr!=NULL; prev=curr, curr=curr->next){
+            if(curr->data==NULL)
+                printf("key=%s, data=NULL, hash_val=%d, n=%d, dim=%ld, flag_op=%d\n", curr->k, i, curr->n, curr->dim, curr->last_op_was_open);
+            else
+                printf("key=%s, data=%s, hash_val=%d, n=%d, dim=%ld, flag_op=%d\n", curr->k, curr->data, i, curr->n, curr->dim, curr->last_op_was_open);
+
+        }
+    }
+}
+
+void totali(int *file_tot, long *dim_tot){
+    *file_tot=file_totali;
+    *dim_tot=dim_totale;
+
 }
